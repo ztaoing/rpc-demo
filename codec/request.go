@@ -8,10 +8,13 @@ package codec
 
 import (
 	"github.com/ztaoing/rpc-demo/codec/codec"
+	"github.com/ztaoing/rpc-demo/service"
 	"reflect"
 )
 
 type request struct {
 	header       *codec.Header
 	argv, replyv reflect.Value
+	mType        *service.MethodType
+	svc          *service.Service
 }

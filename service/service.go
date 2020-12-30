@@ -13,18 +13,18 @@ import (
 	"sync/atomic"
 )
 
-type methodType struct {
+type MethodType struct {
 	method    reflect.Method
 	ArgType   reflect.Type // the first argument
 	ReplyType reflect.Type // the second argument
 	numCalls  uint64       // count the times of the call
 }
 
-func (m *methodType) NumCalls() uint64 {
+func (m *MethodType) NumCalls() uint64 {
 	return atomic.LoadUint64(&m.numCalls)
 }
 
-func (m *methodType) newArgv() reflect.Value {
+func (m *MethodType) NewArgv() reflect.Value {
 	var argv reflect.Value
 	// arg type is point or value
 	if m.ArgType.Kind() == reflect.Ptr {
@@ -35,7 +35,7 @@ func (m *methodType) newArgv() reflect.Value {
 	return argv
 }
 
-func (m *methodType) newReplyv() reflect.Value {
+func (m *MethodType) NewReplyv() reflect.Value {
 	// reply must be a pointer
 	replyv := reflect.New(m.ReplyType.Elem())
 	switch m.ReplyType.Elem().Kind() {
@@ -47,27 +47,27 @@ func (m *methodType) newReplyv() reflect.Value {
 	return replyv
 }
 
-type service struct {
-	name   string
+type Service struct {
+	Name   string
 	typ    reflect.Type
 	rcvr   reflect.Value
-	method map[string]*methodType
+	Method map[string]*MethodType
 }
 
-func newService(rcvr interface{}) *service {
-	s := new(service)
+func NewService(rcvr interface{}) *Service {
+	s := new(Service)
 	s.rcvr = reflect.ValueOf(rcvr)
-	s.name = reflect.Indirect(s.rcvr).Type().Name()
+	s.Name = reflect.Indirect(s.rcvr).Type().Name()
 	s.typ = reflect.TypeOf(rcvr)
 
-	if !ast.IsExported(s.name) {
-		log.Fatalf("rpc server :%s is not a valid service name", s.name)
+	if !ast.IsExported(s.Name) {
+		log.Fatalf("rpc server :%s is not a valid Service name", s.Name)
 	}
 	s.registerMethods()
 	return s
 }
-func (s *service) registerMethods() {
-	s.method = make(map[string]*methodType)
+func (s *Service) registerMethods() {
+	s.Method = make(map[string]*MethodType)
 	for i := 0; i < s.typ.NumMethod(); i++ {
 		method := s.typ.Method(i)
 		mType := method.Type
@@ -83,12 +83,12 @@ func (s *service) registerMethods() {
 		if !isExportedOrBuildinType(argType) || !isExportedOrBuildinType(replyType) {
 			continue
 		}
-		s.method[method.Name] = &methodType{
+		s.Method[method.Name] = &MethodType{
 			method:    method,
 			ArgType:   argType,
 			ReplyType: replyType,
 		}
-		log.Printf("rpc server :register %s.%s\n", s.name, method.Name)
+		log.Printf("rpc server :register %s.%s\n", s.Name, method.Name)
 	}
 }
 
@@ -96,7 +96,7 @@ func isExportedOrBuildinType(t reflect.Type) bool {
 	return ast.IsExported(t.Name()) || t.PkgPath() == ""
 }
 
-func (s *service) call(m *methodType, argv, replyv reflect.Value) error {
+func (s *Service) Call(m *MethodType, argv, replyv reflect.Value) error {
 	atomic.AddUint64(&m.numCalls, 1)
 	f := m.method.Func
 	//通过反射纸调用方法

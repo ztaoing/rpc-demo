@@ -8,12 +8,14 @@ package codec
 
 import (
 	"encoding/json"
-	"fmt"
+	"errors"
 	"github.com/ztaoing/rpc-demo/codec/codec"
+	"github.com/ztaoing/rpc-demo/service"
 	"io"
 	"log"
 	"net"
 	"reflect"
+	"strings"
 	"sync"
 )
 
@@ -31,6 +33,7 @@ var DefaultOption = &Option{
 }
 
 type Server struct {
+	ServiceMap sync.Map
 }
 
 func NewServer() *Server {
@@ -115,18 +118,33 @@ func (s *Server) readRequestHeader(cc codec.Codec) (*codec.Header, error) {
 	return &header, nil
 }
 
+// read header , then decode body with CODEC
 func (s *Server) readRequest(cc codec.Codec) (*request, error) {
 	header, err := s.readRequestHeader(cc)
 	if err != nil {
 		return nil, err
 	}
-	//TODO:
 	req := &request{
 		header: header,
 	}
-	req.argv = reflect.New(reflect.TypeOf(""))
-	if err = cc.ReadBody(req.argv.Interface()); err != nil {
-		log.Println("rpc server:read argv error:", err)
+
+	req.svc, req.mType, err = s.findService(header.ServiceMethod)
+	if err != nil {
+		return req, err
+	}
+
+	req.argv = req.mType.NewArgv()
+	req.replyv = req.mType.NewReplyv()
+	//argv may be pointer or  value type
+	argvi := req.argv.Interface()
+	//argvi must be a pointer
+	if req.argv.Type().Kind() != reflect.Ptr {
+		argvi = req.argv.Addr().Interface()
+	}
+	// use CODEC to decode the body
+	if err = cc.ReadBody(argvi); err != nil {
+		log.Println("rpc server:read body err:", err)
+		return req, err
 	}
 	return req, nil
 }
@@ -141,10 +159,46 @@ func (s *Server) sendResponse(cc codec.Codec, header *codec.Header, body interfa
 }
 
 func (s *Server) handleRequest(cc codec.Codec, req *request, sendMutex *sync.Mutex, wg *sync.WaitGroup) {
-	//TODO: call registered rpc method to get the reply
-
 	defer wg.Done()
-	log.Println(req.header, req.argv.Elem())
-	req.replyv = reflect.ValueOf(fmt.Sprintf("rpc response %d", req.header.Seq))
+	err := req.svc.Call(req.mType, req.argv, req.replyv)
+	if err != nil {
+		req.header.Error = err.Error()
+		s.sendResponse(cc, req.header, req.replyv.Interface(), sendMutex)
+		return
+	}
 	s.sendResponse(cc, req.header, req.replyv.Interface(), sendMutex)
+}
+
+func (s *Server) Register(rcvr interface{}) error {
+	Service := service.NewService(rcvr)
+	if _, dup := s.ServiceMap.LoadOrStore(Service.Name, Service); dup {
+		return errors.New("rpc Service already defiend: " + Service.Name)
+	}
+	return nil
+}
+
+func Register(rcvr interface{}) error {
+	return DefaultServer.Register(rcvr)
+}
+
+func (s *Server) findService(ServiceMethod string) (svc *service.Service, mType *service.MethodType, err error) {
+	dot := strings.LastIndex(ServiceMethod, ".")
+	// if .  dose not in the string of ServiceMethod ,return -1
+	if dot < 0 {
+		err = errors.New("rpc Service : Service/method is ill-formed:" + ServiceMethod)
+		return
+	}
+	ServiceName, MethodName := ServiceMethod[:dot], ServiceMethod[dot+1:]
+	svcLoad, ok := s.ServiceMap.Load(ServiceName)
+	if !ok {
+		err = errors.New("rpc server : can not find Service :" + ServiceName)
+		return
+	}
+	svc = svcLoad.(*service.Service)
+	mType = svc.Method[MethodName]
+	if mType == nil {
+		err = errors.New("rpc server :can not find method :" + MethodName)
+		return
+	}
+	return
 }

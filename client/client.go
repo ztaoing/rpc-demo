@@ -186,7 +186,7 @@ func (c *Client) send(call *Call) {
 	}
 }
 
-func (c *Client) Go(serviceMethod string, args, reply interface{}, done chan *Call) *Call {
+func (c *Client) Go(ServiceMethod string, args, reply interface{}, done chan *Call) *Call {
 	if done == nil {
 		done = make(chan *Call, 10)
 
@@ -194,7 +194,7 @@ func (c *Client) Go(serviceMethod string, args, reply interface{}, done chan *Ca
 		log.Panic("rpc client:done channel is full")
 	}
 	call := &Call{
-		ServiceMethod: serviceMethod,
+		ServiceMethod: ServiceMethod,
 		Args:          args,
 		Reply:         reply,
 		Done:          done,
@@ -203,9 +203,9 @@ func (c *Client) Go(serviceMethod string, args, reply interface{}, done chan *Ca
 	return call
 }
 
-func (c *Client) Call(serviceMethod string, args, reply interface{}) error {
+func (c *Client) Call(ServiceMethod string, args, reply interface{}) error {
 	//waiting for the response
-	call := <-c.Go(serviceMethod, args, reply, make(chan *Call, 1)).Done
+	call := <-c.Go(ServiceMethod, args, reply, make(chan *Call, 1)).Done
 	return call.Error
 }
 
