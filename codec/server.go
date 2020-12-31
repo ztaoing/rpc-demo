@@ -9,6 +9,7 @@ package codec
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/ztaoing/rpc-demo/codec/codec"
 	"github.com/ztaoing/rpc-demo/service"
 	"io"
@@ -17,19 +18,23 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"time"
 )
 
 const MagicNum = 0x3bef5c
 
 // use json to the Default CODEC of Option, and use CodecType to encoding the left datas
 type Option struct {
-	MagicNumber int        //means this is a rpc reuqest
-	CodecType   codec.Type //the CODEC of a client with the server to encoding datas
+	MagicNumber       int           //means this is a rpc reuqest
+	CodecType         codec.Type    //the CODEC of a client with the server to encoding datas
+	ConnectionTimeout time.Duration // 0 means  no time limit
+	HandleTimeout     time.Duration
 }
 
 var DefaultOption = &Option{
-	MagicNumber: MagicNum,
-	CodecType:   codec.GobCodecType,
+	MagicNumber:       MagicNum,
+	CodecType:         codec.GobCodecType,
+	ConnectionTimeout: time.Second * 10,
 }
 
 type Server struct {
@@ -80,14 +85,14 @@ func (s *Server) ServeConn(conn io.ReadWriteCloser) {
 		return
 	}
 
-	s.serveCodec(f(conn))
+	s.serveCodec(f(conn), &opt)
 
 }
 
 var invalidRequest = struct{}{}
 
 //read request -> handle request -> send Response
-func (s *Server) serveCodec(cc codec.Codec) {
+func (s *Server) serveCodec(cc codec.Codec, opt *Option) {
 	sendMutex := new(sync.Mutex)
 	wg := new(sync.WaitGroup)
 	for {
@@ -101,7 +106,7 @@ func (s *Server) serveCodec(cc codec.Codec) {
 		}
 		//success
 		wg.Add(1)
-		go s.handleRequest(cc, req, sendMutex, wg)
+		go s.handleRequest(cc, req, sendMutex, wg, opt.HandleTimeout)
 	}
 	wg.Wait()
 	_ = cc.Close()
@@ -158,15 +163,40 @@ func (s *Server) sendResponse(cc codec.Codec, header *codec.Header, body interfa
 	}
 }
 
-func (s *Server) handleRequest(cc codec.Codec, req *request, sendMutex *sync.Mutex, wg *sync.WaitGroup) {
+func (s *Server) handleRequest(cc codec.Codec, req *request, sendMutex *sync.Mutex, wg *sync.WaitGroup, timeout time.Duration) {
 	defer wg.Done()
-	err := req.svc.Call(req.mType, req.argv, req.replyv)
-	if err != nil {
-		req.header.Error = err.Error()
+	//sendResponse has two parts: called and send , the two parts to make sure the sendResponse called only one time
+	//have called the service.method
+	called := make(chan struct{})
+	//have sendResponse to client
+	send := make(chan struct{})
+
+	go func() {
+		err := req.svc.Call(req.mType, req.argv, req.replyv)
+		called <- struct{}{}
+		if err != nil {
+			req.header.Error = err.Error()
+			s.sendResponse(cc, req.header, req.replyv.Interface(), sendMutex)
+			send <- struct{}{}
+			return
+		}
 		s.sendResponse(cc, req.header, req.replyv.Interface(), sendMutex)
+		send <- struct{}{}
+	}()
+	// waiting with block
+	if timeout == 0 {
+		<-called
+		<-send
 		return
 	}
-	s.sendResponse(cc, req.header, req.replyv.Interface(), sendMutex)
+	select {
+	case <-time.After(timeout):
+		req.header.Error = fmt.Sprintf("rpc server:  handle request timeout:expected within %s", timeout.String())
+		s.sendResponse(cc, req.header, req.replyv.Interface(), sendMutex)
+	case <-called:
+		<-send
+	}
+
 }
 
 func (s *Server) Register(rcvr interface{}) error {
