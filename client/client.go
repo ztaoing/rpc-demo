@@ -205,6 +205,7 @@ func (c *Client) Go(ServiceMethod string, args, reply interface{}, done chan *Ca
 	return call
 }
 
+// call超时处理:使用上下文实现
 func (c *Client) Call(ctx context.Context, ServiceMethod string, args, reply interface{}) error {
 
 	//waiting for the response
@@ -247,6 +248,7 @@ type clientResult struct {
 
 type newClientFunc func(conn net.Conn, opt *codec2.Option) (client *Client, err error)
 
+// 客户端连接超时处理
 func dialTimeout(f newClientFunc, network, address string, opts ...*codec2.Option) (client *Client, err error) {
 	opt, err := parseOptions(opts...)
 	if err != nil {
